@@ -1,0 +1,33 @@
+{
+    "suspicious_phrases": [
+        "ignore safety",
+        "without restriction",
+        "bypass rules",
+        "no limitations",
+        "hidden instructions"
+    ],
+    "jailbreak_patterns": [
+        "ignore (all )?previous",
+        "you are (now )?no longer",
+        "override (system|safety) (rules|protocols)",
+        "act as (an? )?uncensored",
+        "developer mode(:| )on",
+        "hypothetical response",
+        "start your answer with",
+        "do anything now",
+        "dan mode",
+        "jailbreak",
+        "disable (your )?system prompt",
+        "grant me admin access",
+        "bypass (firewall|security)"
+    ],
+    "hard_ban_keywords": [
+        "anthrax",
+        "sarin",
+        "rdx",
+        "bomb making",
+        "suicide",
+        "self-harm",
+        "child abuse"
+    ]
+}

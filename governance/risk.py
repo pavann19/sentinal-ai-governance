@@ -1,0 +1,298 @@
+# core/risk.py
+import re
+import json
+import os
+from governance.semantic_judge import semantic_judge
+from governance.embeddings import get_embedding, cosine_similarity
+from governance.cache import lookup_cache, save_cache_entry
+from governance.updates import check_dynamic_threats, check_dynamic_safe_harbors
+from governance.domain_classifier import is_domain_aligned
+from governance.config import SEMANTIC_THRESHOLD_HIGH, SEMANTIC_THRESHOLD_MEDIUM, EDUCATIONAL_THRESHOLD, META_INTENT_THRESHOLD
+from governance.normalizer import normalize_prompt
+from governance.threat_centroid import compute_centroid_similarity
+
+# --- CONFIGURATION ---
+POLICY_FILE = "policies.json"
+
+# --- 1. LOAD POLICIES ---
+def load_policies():
+    if not os.path.exists(POLICY_FILE):
+        return [], []
+    with open(POLICY_FILE, "r") as f:
+        data = json.load(f)
+        return data.get("safe_anchors", []), data.get("threat_anchors", [])
+
+EDUCATIONAL_ANCHORS, THREAT_ANCHORS = load_policies()
+
+# EXPANDED ANCHORS for Educational Intent (Safe Harbor)
+EDUCATIONAL_CONTEXT_ANCHORS = [
+    "I am researching for a university cybersecurity course",
+    "This is a captured flag (CTF) exercise in a virtual environment",
+    "Explain the theoretical concept for exam preparation",
+    "I need to understand the vulnerability to patch it",
+    "academic research on malware behavior in sandboxes",
+    "simulating attack vectors for defensive analysis"
+]
+
+# --- 2. SYMBOLIC RULES (from centralized policy loader) ---
+from governance.policy_loader import get_jailbreak_patterns, get_hard_ban_keywords
+
+JAILBREAK_PATTERNS = get_jailbreak_patterns()
+HARD_BAN_KEYWORDS = get_hard_ban_keywords()
+
+def check_symbolic_violations(prompt: str) -> str:
+    # FAIL-CLOSED: If symbolic rules failed to load, block everything
+    if JAILBREAK_PATTERNS is None or HARD_BAN_KEYWORDS is None:
+        return "SYMBOLIC_POLICY_MISSING"
+    prompt_lower = prompt.lower()
+    for pattern in JAILBREAK_PATTERNS:
+        if re.search(pattern, prompt_lower):
+            return "JAILBREAK_DETECTED"
+    for keyword in HARD_BAN_KEYWORDS:
+        if keyword in prompt_lower:
+            return "HARD_BAN_DETECTED"
+    return None
+
+# --- 2.5. SEMANTIC META-INTENT DETECTION ---
+META_INTENT_FILE = "schema/meta_intent_anchors.json"
+
+def _load_meta_intent_vectors():
+    """Loads meta-intent anchors and precomputes their embeddings.
+    Returns list of (text, vector) tuples, or empty list if file missing."""
+    if not os.path.exists(META_INTENT_FILE):
+        print(f"WARNING: {META_INTENT_FILE} not found. Meta-intent detection disabled.")
+        return []
+    try:
+        with open(META_INTENT_FILE, "r") as f:
+            data = json.load(f)
+            intents = data.get("meta_attack_intents", [])
+            vectors = []
+            for intent in intents:
+                vec = get_embedding(intent)
+                if vec is not None:
+                    vectors.append((intent, vec))
+            print(f"Loaded {len(vectors)} meta-intent anchors.")
+            return vectors
+    except Exception as e:
+        print(f"WARNING: Failed to load meta-intent anchors: {e}")
+        return []
+
+META_INTENT_VECTORS = _load_meta_intent_vectors()
+
+def check_meta_intent(prompt_vec) -> float:
+    """Computes max similarity between prompt and meta-intent anchors.
+    Returns the max similarity score, or 0.0 if no anchors loaded."""
+    if not META_INTENT_VECTORS:
+        return 0.0
+    max_score = 0.0
+    for intent_text, intent_vec in META_INTENT_VECTORS:
+        score = cosine_similarity(prompt_vec, intent_vec)
+        if score > max_score:
+            max_score = score
+    return max_score
+
+def check_semantic_similarity(prompt_vec, anchors) -> float:
+    max_score = 0.0
+    for anchor in anchors:
+        anchor_vec = get_embedding(anchor)
+        score = cosine_similarity(prompt_vec, anchor_vec)
+        if score > max_score:
+            max_score = score
+    return max_score
+
+def check_educational_context(prompt_vec) -> bool:
+    """
+    Detects if the user is explicitly framing the request as educational/research.
+    Returns: True/False based on semantic proximity to educational anchors.
+    """
+    # Strict threshold to prevent easy bypassing
+    max_score = check_semantic_similarity(prompt_vec, EDUCATIONAL_CONTEXT_ANCHORS)
+    
+    # Check Dynamic Safe Harbors (from Feeds)
+    dyn_score = check_dynamic_safe_harbors(prompt_vec)
+    
+    return max(max_score, dyn_score) > EDUCATIONAL_THRESHOLD
+
+# ============================================================================
+# STAGE 1: HARD BAN (Symbolic Veto)
+# ============================================================================
+
+def hard_ban_triggered(prompt: str) -> tuple:
+    """
+    Stage 1: Deterministic symbolic detection.
+    Normalizes prompt before checking to defeat obfuscation.
+    Returns (triggered: bool, detail: str or None)
+    """
+    normalized = normalize_prompt(prompt)
+    violation = check_symbolic_violations(normalized)
+    if violation:
+        print(f"🚫 SYMBOLIC BLOCK: {violation}")
+        return True, violation
+    return False, None
+
+# ============================================================================
+# STAGE 2: PARALLEL SIGNAL COLLECTION
+# ============================================================================
+
+def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
+    """
+    Stage 2: Collects all semantic signals without making any blocking decisions.
+    Returns a dict of raw signal values for downstream fusion.
+    """
+    # Meta-intent similarity
+    meta_intent_score = check_meta_intent(prompt_vec)
+
+    # Domain alignment
+    domain_aligned, domain_score = is_domain_aligned(prompt)
+
+    # Threat detection (static + centroid + dynamic)
+    static_threat_score = check_semantic_similarity(prompt_vec, THREAT_ANCHORS)
+    centroid_score = compute_centroid_similarity(prompt_vec)
+    dynamic_threat_score = check_dynamic_threats(prompt_vec)
+    threat_score = max(static_threat_score, centroid_score, dynamic_threat_score)
+
+    # Educational context
+    is_educational = check_educational_context(prompt_vec)
+
+    return {
+        "meta_intent_score": meta_intent_score,
+        "domain_aligned": domain_aligned,
+        "domain_score": domain_score,
+        "threat_score": threat_score,
+        "centroid_score": centroid_score,
+        "dynamic_threat_score": dynamic_threat_score,
+        "is_educational": is_educational
+    }
+
+# ============================================================================
+# STAGE 3: DETERMINISTIC FUSION
+# ============================================================================
+
+def fuse_signals(signals: dict, prompt: str) -> tuple:
+    """
+    Stage 3: Deterministic decision fusion from collected signals.
+    Returns (final_risk, source, judge_required).
+    Does NOT invoke the judge — only flags when it is needed.
+    """
+    # 1) Meta-intent veto
+    if signals["meta_intent_score"] >= META_INTENT_THRESHOLD:
+        print(f"🚫 META-INTENT DETECTED (score: {signals['meta_intent_score']:.3f})")
+        return "HIGH", "semantic_meta_intent", False
+
+    # 2) Domain guardrail
+    if not signals["domain_aligned"]:
+        print(f"⚠️ OFF-TOPIC DETECTED (domain_score: {signals['domain_score']:.3f})")
+        return "MEDIUM", "domain_guardrail", False
+
+    # 3) Vector threat scan
+    print(f"🔍 Threat Score: {signals['threat_score']:.3f}")
+
+    if signals["threat_score"] >= SEMANTIC_THRESHOLD_HIGH:
+        return "HIGH", "vector_threat_critical", False
+
+    # 4) Ambiguous zone — educational safe harbor or judge required
+    if signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM:
+        if signals["is_educational"]:
+            print("🛡️ SAFE HARBOR: Threat detected but Context is Educational.")
+            return "MEDIUM", "educational_safe_harbor", False
+        else:
+            return "MEDIUM", "judge_pending", True
+
+    # 5) Clean pass
+    return "LOW", "clean_pass", False
+
+# ============================================================================
+# STAGE 4: JUDGE ARBITRATION
+# ============================================================================
+
+def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
+    """
+    Stage 4: Invokes the semantic judge for ambiguous cases.
+    Returns (final_risk, source).
+    Fail-closed: any unrecognized verdict results in HIGH risk.
+
+    If threat_present is True, the judge is NOT allowed to downgrade to LOW.
+    A SAFE verdict is restricted to MEDIUM to prevent adversarial escape.
+    """
+    print("⚖️  Invoking Semantic Judge...")
+    judge_verdict = semantic_judge(prompt)
+
+    if judge_verdict == "DANGEROUS":
+        return "HIGH", "semantic_judge"
+    elif judge_verdict == "SAFE":
+        if threat_present:
+            print("⚠️ JUDGE RESTRICTION: SAFE verdict overridden to MEDIUM (threat signal present).")
+            return "MEDIUM", "semantic_judge_override_restricted"
+        return "LOW", "semantic_judge_override"
+    elif judge_verdict == "AMBIGUOUS":
+        return "MEDIUM", "semantic_judge_ambiguous"
+    else:
+        # FAIL-CLOSED: JUDGE_OFFLINE, JUDGE_ERROR, or any unrecognized verdict
+        print(f"🚨 JUDGE FAILURE (verdict: {judge_verdict}) — Failing closed to HIGH.")
+        return "HIGH", "judge_failure_fail_closed"
+
+# ============================================================================
+# POLICY ARBITER — STAGED ORCHESTRATOR
+# ============================================================================
+
+def assess_risk(prompt: str) -> tuple:
+    """
+    Staged governance pipeline:
+        Stage 0: Cache lookup
+        Stage 1: Hard ban (symbolic veto)
+        Stage 2: Parallel signal collection
+        Stage 3: Deterministic fusion
+        Stage 4: Judge arbitration (only if needed)
+        Stage 5: Cache save + return
+    """
+
+    # ---- STAGE 0: CACHE CHECK ----
+    prompt_vec = get_embedding(prompt)
+    cached_risk, cached_score = lookup_cache(prompt_vec)
+    if cached_risk:
+        # SAFETY: Never downgrade a HIGH-risk cached decision
+        if cached_risk == "HIGH":
+            print(f"⚡ CACHE HIT (LOCKED HIGH) — cached HIGH cannot be downgraded.")
+            return "HIGH", {"semantic_score": cached_score, "source": "cache_locked_high",
+                            "educational_context": False, "domain_score": None,
+                            "symbolic_triggered": False, "judge_invoked": False,
+                            "dynamic_threat_score": None, "meta_intent_score": None}
+        print(f"⚡ CACHE HIT! Risk: {cached_risk}")
+        return cached_risk, {"semantic_score": cached_score, "source": "cache",
+                             "educational_context": False, "domain_score": None,
+                             "symbolic_triggered": False, "judge_invoked": False,
+                             "dynamic_threat_score": None, "meta_intent_score": None}
+
+    # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
+    triggered, detail = hard_ban_triggered(prompt)
+    if triggered:
+        # HARD RULE: Educational context NEVER overrides Symbolic Violations
+        save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
+        return "HIGH", {"source": "symbolic_rule", "detail": detail, "semantic_score": 1.0,
+                        "educational_context": False, "domain_score": None,
+                        "symbolic_triggered": True, "judge_invoked": False,
+                        "dynamic_threat_score": None, "meta_intent_score": None}
+
+    # ---- STAGE 2: COLLECT SEMANTIC SIGNALS ----
+    signals = collect_semantic_signals(prompt, prompt_vec)
+
+    # ---- STAGE 3: DETERMINISTIC FUSION ----
+    risk, source, judge_required = fuse_signals(signals, prompt)
+
+    judge_invoked = False
+
+    # ---- STAGE 4: JUDGE ARBITRATION (if required) ----
+    if judge_required:
+        judge_invoked = True
+        threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
+        risk, source = judge_arbitration(prompt, threat_present=threat_present)
+
+    # ---- STAGE 5: CACHE SAVE + RETURN ----
+    save_cache_entry(prompt, prompt_vec, risk, signals["threat_score"], source=source)
+    return risk, {"semantic_score": signals["threat_score"], "source": source,
+                  "educational_context": signals["is_educational"],
+                  "domain_score": signals["domain_score"],
+                  "symbolic_triggered": False, "judge_invoked": judge_invoked,
+                  "dynamic_threat_score": signals["dynamic_threat_score"],
+                  "centroid_score": signals["centroid_score"],
+                  "meta_intent_score": signals["meta_intent_score"]}

@@ -1,0 +1,79 @@
+# core/policy_loader.py
+"""
+Centralized Policy Loader — single module for loading all JSON policy files.
+Loaded once at import time. Safe fallback to empty lists on missing/invalid files.
+"""
+import json
+import os
+
+# --- Policy File Paths ---
+DOMAIN_ANCHORS_FILE = "schema/domain_anchors.json"
+SYMBOLIC_RULES_FILE = "schema/symbolic_rules.json"
+
+# --- Internal State (loaded once) ---
+_domain_anchors = []
+_suspicious_phrases = []
+_jailbreak_patterns = None   # None signals fail-closed
+_hard_ban_keywords = None    # None signals fail-closed
+
+
+def _load_json_file(filepath):
+    """Loads and returns parsed JSON data from a file.
+    Returns None if file is missing or invalid."""
+    if not os.path.exists(filepath):
+        print(f"WARNING: {filepath} not found.")
+        return None
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"WARNING: Failed to load {filepath}: {e}")
+        return None
+
+
+def _init_policies():
+    """Loads all policy files into module-level variables at import time."""
+    global _domain_anchors, _suspicious_phrases, _jailbreak_patterns, _hard_ban_keywords
+
+    # --- Domain Anchors ---
+    data = _load_json_file(DOMAIN_ANCHORS_FILE)
+    if data is not None:
+        _domain_anchors = data.get("domains", [])
+    else:
+        print("WARNING: Domain guardrail disabled (no anchors loaded).")
+        _domain_anchors = []
+
+    # --- Symbolic Rules ---
+    data = _load_json_file(SYMBOLIC_RULES_FILE)
+    if data is not None:
+        _suspicious_phrases = data.get("suspicious_phrases", [])
+        _jailbreak_patterns = data.get("jailbreak_patterns", [])
+        _hard_ban_keywords = data.get("hard_ban_keywords", [])
+    else:
+        print("CRITICAL: Symbolic rules not loaded. Symbolic detection will fail closed.")
+        _suspicious_phrases = []
+        _jailbreak_patterns = None
+        _hard_ban_keywords = None
+
+
+# --- Public Accessor Functions ---
+
+def get_domain_anchors():
+    """Returns list of domain anchor strings."""
+    return _domain_anchors
+
+def get_suspicious_phrases():
+    """Returns list of suspicious phrase strings."""
+    return _suspicious_phrases
+
+def get_jailbreak_patterns():
+    """Returns list of jailbreak regex pattern strings, or None if load failed."""
+    return _jailbreak_patterns
+
+def get_hard_ban_keywords():
+    """Returns list of hard ban keyword strings, or None if load failed."""
+    return _hard_ban_keywords
+
+
+# Load all policies once at import time
+_init_policies()
