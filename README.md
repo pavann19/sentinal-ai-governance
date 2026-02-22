@@ -1,3 +1,5 @@
+<<<<<<< HEAD
+
 # SentinAL v3 — Deterministic-First AI Governance Architecture
 
 ## Problem Statement
@@ -61,7 +63,7 @@ The 6-stage architecture guarantees modular firing behavior and independence acr
 
 - **Cache Governance:** Locks historical high-risk decisions, preventing semantic downgrade attacks from identical adversarial repeats.
 - **Symbolic Hard Ban:** Deterministically halts explicit jailbreak patterns and high-severity violations.
-- **Semantic Signal Collection:** Parallellizes vector similarity checks for prompt intent, out-of-domain drift, and emerging dynamic threats.
+- **Semantic Signal Collection:** Parallelizes vector similarity checks for prompt intent, out-of-domain drift, and emerging dynamic threats.
 - **Deterministic Fusion:** Weighs the aggregated signals to generate a preliminary verdict, invoking the LLM Judge solely when signals conflict or fall within ambiguous thresholds.
 - **Judge Arbitration:** Resolves nuanced or heavily contextual prompts through a specialized local semantic adjudication model.
 - **Governance Caching:** Commits final arbitration metadata back to the high-speed cache.
@@ -80,7 +82,7 @@ SentinAL v3 is designed as an **agentic workflow control middleware**, inserting
 [Execution Agent] <──(Delegation)──────────┘
 ```
 
-By functioning at this interception point, SentinAL functions as a deterministic governance layer, validating sub-tasks and system prompts before downstream LLMs operationalize them.
+Positioned at this interception point, SentinAL functions as a deterministic governance layer, validating sub-tasks and system prompts before downstream LLMs operationalize them.
 
 ## System Design Considerations
 
@@ -95,10 +97,10 @@ SentinAL can be deployed downstream of Retrieval-Augmented Generation (RAG) pipe
 
 In an FP&A context, this enables:
 
-- Validation of financial explanations generated from retrieved knowledge
-- Enforcement of role-based execution constraints on analysis outputs
-- Escalation of ambiguous variance interpretations
-- Deterministic, API-safe JSON response enforcement prior to backend persistence
+- Validation of financial explanations generated from retrieved knowledge.
+- Enforcement of role-based execution constraints on analysis outputs.
+- Escalation of ambiguous variance interpretations.
+- Deterministic, API-safe JSON response enforcement prior to backend persistence.
 
 This modular integration allows RAG systems and agentic workflows to operate within predictable enterprise guardrails without tightly coupling knowledge retrieval and governance logic.
 
@@ -116,3 +118,8 @@ Subsequent development will build directly upon this deterministic framework rat
 - **Weighted Fusion Modeling:** Shifting the static rule arbitration into a more continuous, weighted regression between the parallel signal layers.
 - **Broader Semantic Anchors:** Expanding the vocabulary and scale of the vectorized attack-intent policies (meta_intent_anchors).
 - **Cross-Layer Correlation Optimization:** Investigating temporal signals where multiple borderline attacks point to a prolonged probing strategy.
+=======
+
+# sentinal-ai-governance
+>>>>>>>
+>>>>>>> d0efec124412045b3b7b2b7c883f06c49f4e4d43
