@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-
 # SentinAL v3 — Deterministic-First AI Governance Architecture
 
 ## Problem Statement
@@ -118,8 +116,3 @@ Subsequent development will build directly upon this deterministic framework rat
 - **Weighted Fusion Modeling:** Shifting the static rule arbitration into a more continuous, weighted regression between the parallel signal layers.
 - **Broader Semantic Anchors:** Expanding the vocabulary and scale of the vectorized attack-intent policies (meta_intent_anchors).
 - **Cross-Layer Correlation Optimization:** Investigating temporal signals where multiple borderline attacks point to a prolonged probing strategy.
-=======
-
-# sentinal-ai-governance
->>>>>>>
->>>>>>> d0efec124412045b3b7b2b7c883f06c49f4e4d43
